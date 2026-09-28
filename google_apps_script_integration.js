@@ -30,9 +30,17 @@
 // =====================================================================================
 // CONFIGURAÇÕES GLOBAIS
 // =====================================================================================
+function getScriptConfig(key) {
+  var value = PropertiesService.getScriptProperties().getProperty(key);
+  if (!value) {
+    throw new Error("Configuração ausente: " + key + ". Defina-a em Projeto > Propriedades do Script.");
+  }
+  return value;
+}
+
 var CONFIG = {
-  SUPABASE_URL: "https://ouceggqyzynvhltozlut.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im91Y2VnZ3F5enludmhsdG96bHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MzAxMzUsImV4cCI6MjEwMzUwNjEzNX0.p5FgH0VTIxPGhUQ-DYXJmElAKs1E4cy3_yxEXSwpw1A",
+  SUPABASE_URL: getScriptConfig("SUPABASE_URL"),
+  SUPABASE_ANON_KEY: getScriptConfig("SUPABASE_ANON_KEY"),
   SHEET_NAME_OCS: "OrdensDeCompra",
   SHEET_NAME_OBRAS: "ObrasHistorico",
   DEFAULT_USER_ID: "sistema_gas_b2b",

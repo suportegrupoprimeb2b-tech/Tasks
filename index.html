@@ -2490,9 +2490,13 @@ Prefer: return=minimal</div>
 /* ======================================================
    CONFIGURAÇÃO DO SUPABASE
 ====================================================== */
-const SUPABASE_URL = "https://ouceggqyzynvhltozlut.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im91Y2VnZ3F5enludmhsdG96bHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MzAxMzUsImV4cCI6MjEwMzUwNjEzNX0.p5FgH0VTIxPGhUQ-DYXJmElAKs1E4cy3_yxEXSwpw1A";
+const APP_CONFIG = window.APP_CONFIG || {
+  SUPABASE_URL: "https://ouceggqyzynvhltozlut.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im91Y2VnZ3F5enludmhsdG96bHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5MzAxMzUsImV4cCI6MjEwMzUwNjEzNX0.p5FgH0VTIxPGhUQ-DYXJmElAKs1E4cy3_yxEXSwpw1A"
+};
 
+const SUPABASE_URL = APP_CONFIG.SUPABASE_URL;
+const SUPABASE_ANON_KEY = APP_CONFIG.SUPABASE_ANON_KEY;
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* ---------- ESTADO GLOBAL ---------- */
@@ -5076,27 +5080,6 @@ const AIAssistantModule = (function () {
     }
 
     // Executar turno da IA
-    await runAiTurn();
-  }
-
-    if (error) {
-      // Falhou — guardar na outbox para sincronização posterior
-      console.warn('[AIAssistant] Offline — enfileirando mensagem:', clientMsgId);
-      outbox.push({
-        client_msg_id: clientMsgId,
-        conversation_id: conversationId,
-        content,
-        created_at: localMsg.created_at,
-        retries: 0
-      });
-      saveOutbox();
-    } else {
-      // Atualizar status para done no espelho local
-      const idx = messages.findIndex(m => m.client_msg_id === clientMsgId);
-      if (idx >= 0) messages[idx].status = 'done';
-    }
-
-    // Executar turno da IA (mesmo offline, para enfileirar a resposta quando voltar)
     await runAiTurn();
   }
 

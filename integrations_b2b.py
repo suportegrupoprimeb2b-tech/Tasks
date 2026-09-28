@@ -13,9 +13,12 @@ import os
 import json
 import logging
 import asyncio
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, asdict
+
+from dotenv import load_dotenv
 
 # Configuração de Logs Estruturados
 logging.basicConfig(
@@ -23,6 +26,20 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] [%(name)s]: %(message)s'
 )
 logger = logging.getLogger("B2BLogisticsIntegrator")
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def get_required_env(name: str, default: Optional[str] = None) -> str:
+    value = os.getenv(name)
+    if value is None or value == "":
+        if default is not None:
+            return default
+        raise RuntimeError(
+            f"Variável de ambiente ausente: {name}. Defina-a no arquivo .env."
+        )
+    return value
 
 
 # --------------------------------------------------------------------------------------
@@ -211,6 +228,14 @@ class DistributorScraper:
 # EXECUÇÃO DE EXEMPLO / TESTE
 # --------------------------------------------------------------------------------------
 async def main():
+    supabase_url = get_required_env("SUPABASE_URL")
+    supabase_key = get_required_env("SUPABASE_ANON_KEY")
+    sefaz_api_key = get_required_env("SEFAZ_API_KEY", default="SEFAZ_KEY_PRODUCTION_SAMPLE")
+
+    logger.info("Credenciais carregadas com sucesso via .env.")
+    print(f"SUPABASE_URL carregada: {supabase_url}")
+    print(f"SEFAZ_API_KEY carregada: {sefaz_api_key[:4]}...{sefaz_api_key[-4:]}")
+
     print("\n--- [TESTE 1] RECONCILIAÇÃO DE ORDENS DE COMPRA X OBRAS ---")
     reconciler = PurchaseOrderReconciler(tolerance_days=1)
     
