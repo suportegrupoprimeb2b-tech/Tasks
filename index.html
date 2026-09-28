@@ -2499,6 +2499,45 @@ const SUPABASE_URL = APP_CONFIG.SUPABASE_URL;
 const SUPABASE_ANON_KEY = APP_CONFIG.SUPABASE_ANON_KEY;
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+async function ensureUserProfile(user) {
+  if (!user || !user.id) return null;
+
+  const profilePayload = {
+    id: user.id,
+    email: user.email || '',
+    full_name: user.user_metadata?.full_name || (user.email ? user.email.split('@')[0] : 'Usuário'),
+    avatar_url: user.user_metadata?.avatar_url || null,
+    updated_at: new Date().toISOString()
+  };
+
+  const { error } = await sb.from('profiles').upsert(profilePayload, { onConflict: 'id' });
+  if (error) {
+    console.warn('[Auth] Não foi possível persistir o perfil do usuário:', error);
+    return { ok: false, error };
+  }
+
+  return { ok: true };
+}
+
+function getAuthErrorMessage(error) {
+  if (!error) return 'Erro inesperado ao autenticar.';
+  const msg = String(error.message || error.details || error.hint || 'Erro desconhecido');
+
+  if (msg.toLowerCase().includes('table') && msg.toLowerCase().includes('does not exist')) {
+    return 'Estrutura do Supabase ausente. Crie as tabelas de autenticação e perfil antes de entrar.';
+  }
+
+  if (msg.toLowerCase().includes('invalid login credentials')) {
+    return 'Credenciais inválidas. Verifique o e-mail e a senha.';
+  }
+
+  if (msg.toLowerCase().includes('email')) {
+    return 'E-mail inválido ou já utilizado.';
+  }
+
+  return msg;
+}
+
 /* ---------- ESTADO GLOBAL ---------- */
 let currentUser = null;
 let tasks = [];
@@ -3834,16 +3873,22 @@ authSubmitBtn.addEventListener('click', async ()=>{
   if(isRegisterMode){
     const { data, error } = await sb.auth.signUp({ email, password });
     if(error){
-      authMsg.className='auth-msg error'; authMsg.textContent=error.message;
+      authMsg.className='auth-msg error'; authMsg.textContent = getAuthErrorMessage(error);
     } else {
+      if (data?.user) {
+        await ensureUserProfile(data.user);
+      }
       authMsg.className='auth-msg ok';
       authMsg.textContent='Credencial criada com sucesso! Faça login.';
     }
   } else {
     const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if(error){
-      authMsg.className='auth-msg error'; authMsg.textContent='Credenciais inválidas.';
+      authMsg.className='auth-msg error'; authMsg.textContent = getAuthErrorMessage(error);
     } else {
+      if (data?.user) {
+        await ensureUserProfile(data.user);
+      }
       await onLogin(data.user);
     }
   }
