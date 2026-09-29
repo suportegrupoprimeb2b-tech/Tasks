@@ -2127,11 +2127,22 @@
               <!-- Mensagens renderizadas dinamicamente -->
             </div>
 
+            <div id="chatAiSettingsPanel" style="display:none; padding:14px 16px; border-top:1px solid var(--border-subtle); background:var(--panel-2);">
+              <label for="chatAiInstructions" style="display:block; margin-bottom:6px; font-size:12px; font-weight:600;">Instruções de atendimento</label>
+              <textarea id="chatAiInstructions" rows="2" placeholder="Ex.: Responda como atendente da Logística B2B, com clareza e cordialidade." style="width:100%; resize:vertical; padding:9px 10px; border:1px solid var(--border-subtle); border-radius:var(--radius); background:var(--panel-solid); color:var(--text-primary); font:inherit;"></textarea>
+              <label for="chatAiReplyBlocks" style="display:block; margin:10px 0 6px; font-size:12px; font-weight:600;">Respostas automáticas por palavra-chave</label>
+              <textarea id="chatAiReplyBlocks" rows="3" placeholder="horario => Nosso atendimento funciona de segunda a sexta, das 8h às 18h.&#10;status => Envie o número do pedido para consultar o status." style="width:100%; resize:vertical; padding:9px 10px; border:1px solid var(--border-subtle); border-radius:var(--radius); background:var(--panel-solid); color:var(--text-primary); font:inherit;"></textarea>
+              <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+                <button class="btn-secondary" id="chatAiSaveSettingsBtn" type="button">Salvar automação</button>
+              </div>
+            </div>
+
             <!-- Input e Envio de Mensagens -->
             <div class="chat-input-bar">
               <button class="btn-ai" id="chatAiToggleBtn" title="Vincular IA nesta conversa" style="display:none; padding: 12px; border-radius: var(--radius); flex-shrink: 0;">
                 🤖 IA: Off
               </button>
+              <button class="btn-secondary" id="chatAiConfigureBtn" type="button" title="Configurar instruções e respostas automáticas" style="display:none; padding:12px; flex-shrink:0;">Regras</button>
               <input type="text" id="chatMessageInput" placeholder="Escreva uma mensagem..." onkeydown="if(event.key==='Enter') ChatModule.sendMessage()" oninput="ChatModule.handleTyping()">
               <button class="btn-send" id="chatSendBtn" onclick="ChatModule.sendMessage()">
                 Enviar 🚀
@@ -3261,6 +3272,13 @@ ${customInstruction || 'Elabore um parecer executivo completo com status das OCs
     return result;
   }
 
+  async function generateChatReply(systemPrompt, userPrompt) {
+    const keyInfo = getActiveKeyInfo();
+    if (!keyInfo) throw new Error('Configure uma API Key na Central de IA.');
+    const result = await dispatchProviderCall(keyInfo.config, keyInfo.apiKey, systemPrompt, userPrompt);
+    return { ...result, model: keyInfo.config.modelId };
+  }
+
   // Verifica se existe ao menos uma API Key salva localmente (por provedor).
   // Usado para decidir se a opção "Marcos Prime IA" aparece no chat.
   function getActiveKeyInfo() {
@@ -3527,7 +3545,7 @@ ${customInstruction || 'Elabore um parecer executivo completo com status das OCs
     container.innerHTML = reasoningHtml + html;
   }
 
-  return { init, triggerGeneration, dispatchProviderCall, getActiveKeyInfo, hasActiveKey };
+  return { init, triggerGeneration, dispatchProviderCall, generateChatReply, getActiveKeyInfo, hasActiveKey };
 })();
 
 /* ======================================================
@@ -5993,6 +6011,8 @@ const ChatModule = (function () {
   let typingChannel = null;
   let initialized = false;
   let loadingMore = false;
+  let chatControlsBound = false;
+  let aiAutomationSettings = { enabled: false, instructions: '', reply_blocks: [] };
   const PAGE_SIZE = 50;
 
   // --- "Marcos Prime IA": assistente de IA para conversar diretamente ---
@@ -6280,8 +6300,7 @@ const ChatModule = (function () {
     document.getElementById('chatEmptyState').style.display = 'none';
     document.getElementById('chatActiveBox').style.display = 'flex';
 
-    // Botão de vincular IA só faz sentido numa conversa com uma pessoa real,
-    // e apenas quando existe uma API Key ativa configurada.
+    // A automação roda no worker e não depende de uma chave no navegador.
     updateAiToggleVisibility();
     const typingIndicator = document.getElementById('chatTypingIndicator');
     if (typingIndicator) typingIndicator.style.display = 'none';
@@ -6300,6 +6319,8 @@ const ChatModule = (function () {
       area.innerHTML = '<div style="text-align:center;padding:20px;color:var(--delivery);">Erro ao criar conversa</div>';
       return;
     }
+
+    await loadAiAutomationSettings();
 
     // Carregar mensagens
     await loadMessages(activeConversationId);
@@ -6342,10 +6363,97 @@ const ChatModule = (function () {
 
   function updateAiToggleVisibility() {
     const btn = document.getElementById('chatAiToggleBtn');
-    if (!btn) return;
-    const hasKey = typeof AIReportModule !== 'undefined' && AIReportModule.hasActiveKey();
+    const configureBtn = document.getElementById('chatAiConfigureBtn');
+    if (!btn || !configureBtn) return;
     const inHumanConversation = !!activeContactId && activeContactId !== AI_CONTACT_ID;
-    btn.style.display = (hasKey && inHumanConversation) ? '' : 'none';
+    btn.style.display = inHumanConversation ? '' : 'none';
+    configureBtn.style.display = inHumanConversation ? '' : 'none';
+    btn.textContent = aiAutomationSettings.enabled ? '🤖 IA: On' : '🤖 IA: Off';
+    btn.title = aiAutomationSettings.enabled ? 'Desativar respostas automáticas nesta conversa' : 'Ativar respostas automáticas nesta conversa';
+    btn.style.background = aiAutomationSettings.enabled
+      ? 'linear-gradient(135deg, #10b981, #059669)'
+      : 'linear-gradient(135deg, #a855f7, #6366f1)';
+  }
+
+  async function loadAiAutomationSettings() {
+    const { data, error } = await sb
+      .from('conversation_ai_settings')
+      .select('enabled, instructions, reply_blocks')
+      .eq('conversation_id', activeConversationId)
+      .eq('user_id', getMyId())
+      .maybeSingle();
+
+    aiAutomationSettings = !error && data
+      ? { enabled: !!data.enabled, instructions: data.instructions || '', reply_blocks: Array.isArray(data.reply_blocks) ? data.reply_blocks : [] }
+      : { enabled: false, instructions: '', reply_blocks: [] };
+
+    const instructionsInput = document.getElementById('chatAiInstructions');
+    const blocksInput = document.getElementById('chatAiReplyBlocks');
+    if (instructionsInput) instructionsInput.value = aiAutomationSettings.instructions;
+    if (blocksInput) {
+      blocksInput.value = aiAutomationSettings.reply_blocks
+        .map(block => `${block.keyword} => ${block.reply}`)
+        .join('\n');
+    }
+    updateAiToggleVisibility();
+  }
+
+  async function saveAiAutomationSettings(settings) {
+    if (!activeConversationId || !getMyId()) return false;
+    const payload = {
+      conversation_id: activeConversationId,
+      user_id: getMyId(),
+      enabled: !!settings.enabled,
+      instructions: settings.instructions || '',
+      reply_blocks: settings.reply_blocks || []
+    };
+    const { error } = await sb
+      .from('conversation_ai_settings')
+      .upsert(payload, { onConflict: 'conversation_id,user_id' });
+
+    if (error) {
+      console.error('[ChatModule] Erro ao salvar automação:', error);
+      showToastChat('Não foi possível salvar. Execute a atualização do supabase_schema.sql.', true);
+      return false;
+    }
+    aiAutomationSettings = payload;
+    updateAiToggleVisibility();
+    return true;
+  }
+
+  async function toggleAiAutomation() {
+    const enabled = !aiAutomationSettings.enabled;
+    if (await saveAiAutomationSettings({ ...aiAutomationSettings, enabled })) {
+      showToastChat(enabled ? 'Respostas automáticas ativadas nesta conversa.' : 'Respostas automáticas desativadas.');
+    }
+  }
+
+  async function saveAiAutomationForm() {
+    const instructions = (document.getElementById('chatAiInstructions').value || '').trim();
+    const rawBlocks = document.getElementById('chatAiReplyBlocks').value || '';
+    const reply_blocks = rawBlocks.split('\n').map(line => {
+      const separator = line.indexOf('=>');
+      if (separator < 0) return null;
+      const keyword = line.slice(0, separator).trim();
+      const reply = line.slice(separator + 2).trim();
+      return keyword && reply ? { keyword, reply } : null;
+    }).filter(Boolean);
+
+    if (await saveAiAutomationSettings({ ...aiAutomationSettings, instructions, reply_blocks })) {
+      document.getElementById('chatAiSettingsPanel').style.display = 'none';
+      showToastChat('Instruções e respostas automáticas salvas.');
+    }
+  }
+
+  function bindAiControls() {
+    if (chatControlsBound) return;
+    chatControlsBound = true;
+    document.getElementById('chatAiToggleBtn')?.addEventListener('click', toggleAiAutomation);
+    document.getElementById('chatAiConfigureBtn')?.addEventListener('click', () => {
+      const panel = document.getElementById('chatAiSettingsPanel');
+      panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    });
+    document.getElementById('chatAiSaveSettingsBtn')?.addEventListener('click', saveAiAutomationForm);
   }
 
   function unsubscribeRealtimeChannels() {
@@ -6721,6 +6829,7 @@ const ChatModule = (function () {
   // --- Inicialização ---
   function init() {
     if (!currentUser) return;
+    bindAiControls();
 
     if (typeof AIReportModule !== 'undefined' && AIReportModule.hasActiveKey()) {
       AIAssistantModule.init();
@@ -6755,6 +6864,8 @@ const ChatModule = (function () {
     renderContactsList,
     openChat,
     sendMessage,
+    toggleAiAutomation,
+    saveAiAutomationForm,
     handleTyping,
     loadOlder,
     cleanup,
@@ -6834,24 +6945,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // 4. Vincular IA na Conversa (Chat)
-  const chatAiToggleBtn = document.getElementById('chatAiToggleBtn');
-  let isChatAiEnabled = false;
-  if (chatAiToggleBtn) {
-    chatAiToggleBtn.addEventListener('click', () => {
-      isChatAiEnabled = !isChatAiEnabled;
-      if (isChatAiEnabled) {
-        chatAiToggleBtn.innerHTML = '🤖 IA: On';
-        chatAiToggleBtn.style.background = 'linear-gradient(135deg, #10b981, #059669)';
-        chatAiToggleBtn.style.boxShadow = '0 4px 16px rgba(16, 185, 129, 0.35)';
-        if(window.addAiMessage) window.addAiMessage("system", "A IA foi ativada nesta conversa e ajudará com as respostas e análises.");
-      } else {
-        chatAiToggleBtn.innerHTML = '🤖 IA: Off';
-        chatAiToggleBtn.style.background = 'linear-gradient(135deg, #a855f7, #6366f1)';
-        chatAiToggleBtn.style.boxShadow = '0 4px 16px rgba(168, 85, 247, 0.35)';
-      }
-    });
-  }
 });
 </script>
 </body>
