@@ -3085,11 +3085,13 @@ const AIReportModule = (function() {
     'mistral-large-2': { provider: 'mistral', keyName: 'ai_key_mistral', providerLabel: 'Mistral / OpenRouter Key', modelId: 'mistral-large-latest', badge: '🌪️ Mistral Large 2' }
   };
 
-  let selectedModel = 'claude-3-5-sonnet';
+  let selectedModel = 'gemini-3-5-flash-lite';
   let lastGeneratedReport = '';
 
   function init() {
     setupUI();
+    const modelSelect = document.getElementById('aiModelSelect');
+    if (modelSelect) modelSelect.value = selectedModel;
     updateModelView(selectedModel);
   }
 

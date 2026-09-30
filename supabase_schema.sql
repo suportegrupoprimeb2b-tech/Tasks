@@ -190,6 +190,10 @@ create table if not exists public.messages (
   created_at timestamptz default now()
 );
 
+alter table public.messages
+  add column if not exists read_at timestamptz,
+  add column if not exists automated_reply_to uuid references public.messages(id) on delete set null;
+
 alter table public.messages enable row level security;
 
 drop policy if exists "messages_acesso_usuario" on public.messages;
@@ -222,9 +226,22 @@ create table if not exists public.ai_reply_jobs (
   last_error text,
   reply_message_id uuid references public.messages(id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
   unique (message_id)
 );
+
+alter table public.ai_reply_jobs
+  add column if not exists user_id uuid references auth.users(id) on delete cascade;
+
+update public.ai_reply_jobs j
+set user_id = case
+  when c.user1_id = m.sender_id then c.user2_id
+  when c.user2_id = m.sender_id then c.user1_id
+  else null
+end
+from public.messages m
+join public.conversations c on c.id = m.conversation_id
+where j.message_id = m.id
+  and j.user_id is null;
 
 alter table public.ai_reply_jobs enable row level security;
 
@@ -285,14 +302,12 @@ begin
       status,
       attempts,
       available_at,
-      created_at,
-      updated_at
+      created_at
     ) values (
       NEW.id,
       v_other_user,
       'queued',
       0,
-      now(),
       now(),
       now()
     );
@@ -309,20 +324,10 @@ for each row
 execute function public.enqueue_ai_reply_job_for_message();
 
 create or replace function public.claim_ai_reply_jobs(p_batch_size int default 10)
-returns table (
-  id uuid,
-  message_id uuid,
-  user_id uuid,
-  status text,
-  attempts int,
-  available_at timestamptz,
-  locked_at timestamptz,
-  last_error text,
-  reply_message_id uuid,
-  created_at timestamptz,
-  updated_at timestamptz
-)
+returns setof public.ai_reply_jobs
 language plpgsql
+security definer
+set search_path = pg_catalog, public
 as $$
 begin
   return query
@@ -339,11 +344,10 @@ begin
   update public.ai_reply_jobs j
   set status = 'processing',
       attempts = j.attempts + 1,
-      locked_at = now(),
-      updated_at = now()
+      locked_at = now()
   from claimed
   where j.id = claimed.id
-  returning j.id, j.message_id, j.user_id, j.status, j.attempts, j.available_at, j.locked_at, j.last_error, j.reply_message_id, j.created_at, j.updated_at;
+    returning j.*;
 end;
 $$;
 
