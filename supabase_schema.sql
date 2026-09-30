@@ -192,6 +192,8 @@ create table if not exists public.messages (
 
 alter table public.messages enable row level security;
 
+drop policy if exists "messages_acesso_usuario" on public.messages;
+
 create policy "messages_acesso_usuario"
 on public.messages for all
 using (
