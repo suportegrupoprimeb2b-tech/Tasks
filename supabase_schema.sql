@@ -14,6 +14,10 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
+drop policy if exists "profiles_usuarios_podem_ver_proprio_perfil" on public.profiles;
+drop policy if exists "profiles_usuarios_podem_atualizar_proprio_perfil" on public.profiles;
+drop policy if exists "profiles_usuarios_podem_criar_proprio_perfil" on public.profiles;
+
 create policy "profiles_usuarios_podem_ver_proprio_perfil"
 on public.profiles for select
 using (auth.uid() = id);
@@ -42,6 +46,8 @@ create table if not exists public.tasks (
 
 alter table public.tasks enable row level security;
 
+drop policy if exists "tasks_usuarios_acessam_somente_suas_tarefas" on public.tasks;
+
 create policy "tasks_usuarios_acessam_somente_suas_tarefas"
 on public.tasks for all
 using (auth.uid() = user_id)
@@ -56,6 +62,8 @@ create table if not exists public.ai_conversations (
 );
 
 alter table public.ai_conversations enable row level security;
+
+drop policy if exists "ai_conversations_acesso_usuario" on public.ai_conversations;
 
 create policy "ai_conversations_acesso_usuario"
 on public.ai_conversations for all
@@ -75,6 +83,8 @@ create table if not exists public.ai_messages (
 );
 
 alter table public.ai_messages enable row level security;
+
+drop policy if exists "ai_messages_acesso_usuario" on public.ai_messages;
 
 create policy "ai_messages_acesso_usuario"
 on public.ai_messages for all
@@ -346,6 +356,10 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+drop trigger if exists set_updated_at_profiles on public.profiles;
+drop trigger if exists set_updated_at_tasks on public.tasks;
+drop trigger if exists set_updated_at_ai_conversations on public.ai_conversations;
 
 create trigger set_updated_at_profiles
 before update on public.profiles
