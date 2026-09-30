@@ -14,18 +14,15 @@ create table if not exists public.profiles (
 
 alter table public.profiles enable row level security;
 
-drop policy if exists "profiles_usuarios_podem_ver_proprio_perfil" on public.profiles;
 create policy "profiles_usuarios_podem_ver_proprio_perfil"
 on public.profiles for select
 using (auth.uid() = id);
 
-drop policy if exists "profiles_usuarios_podem_atualizar_proprio_perfil" on public.profiles;
 create policy "profiles_usuarios_podem_atualizar_proprio_perfil"
 on public.profiles for update
 using (auth.uid() = id)
 with check (auth.uid() = id);
 
-drop policy if exists "profiles_usuarios_podem_criar_proprio_perfil" on public.profiles;
 create policy "profiles_usuarios_podem_criar_proprio_perfil"
 on public.profiles for insert
 with check (auth.uid() = id);
@@ -45,7 +42,6 @@ create table if not exists public.tasks (
 
 alter table public.tasks enable row level security;
 
-drop policy if exists "tasks_usuarios_acessam_somente_suas_tarefas" on public.tasks;
 create policy "tasks_usuarios_acessam_somente_suas_tarefas"
 on public.tasks for all
 using (auth.uid() = user_id)
@@ -61,7 +57,6 @@ create table if not exists public.ai_conversations (
 
 alter table public.ai_conversations enable row level security;
 
-drop policy if exists "ai_conversations_acesso_usuario" on public.ai_conversations;
 create policy "ai_conversations_acesso_usuario"
 on public.ai_conversations for all
 using (auth.uid() = user_id)
@@ -81,7 +76,6 @@ create table if not exists public.ai_messages (
 
 alter table public.ai_messages enable row level security;
 
-drop policy if exists "ai_messages_acesso_usuario" on public.ai_messages;
 create policy "ai_messages_acesso_usuario"
 on public.ai_messages for all
 using (
@@ -107,21 +101,48 @@ create table if not exists public.conversations (
 
 alter table public.conversations enable row level security;
 
-drop policy if exists "conversations_acesso_usuario" on public.conversations;
 create policy "conversations_acesso_usuario"
 on public.conversations for all
 using (auth.uid() = user1_id or auth.uid() = user2_id)
 with check (auth.uid() = user1_id or auth.uid() = user2_id);
 
+create table if not exists public.conversation_automations (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  name text not null check (length(trim(name)) > 0),
+  command text not null check (command ~ '^/[A-Za-z0-9_-]+$'),
+  topic text not null check (length(trim(topic)) > 0),
+  start_message text not null check (length(trim(start_message)) > 0),
+  instructions text not null default '',
+  reply_blocks jsonb not null default '[]'::jsonb check (jsonb_typeof(reply_blocks) = 'array'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, command)
+);
+
+alter table public.conversation_automations enable row level security;
+
+drop policy if exists "conversation_automations_acesso_proprio_usuario"
+on public.conversation_automations;
+
+create policy "conversation_automations_acesso_proprio_usuario"
+on public.conversation_automations for all
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
 create table if not exists public.conversation_ai_settings (
   conversation_id uuid not null references public.conversations(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
+  automation_id uuid references public.conversation_automations(id) on delete set null,
   enabled boolean not null default false,
   instructions text not null default '',
   reply_blocks jsonb not null default '[]'::jsonb check (jsonb_typeof(reply_blocks) = 'array'),
   updated_at timestamptz not null default now(),
   primary key (conversation_id, user_id)
 );
+
+alter table public.conversation_ai_settings
+  add column if not exists automation_id uuid references public.conversation_automations(id) on delete set null;
 
 alter table public.conversation_ai_settings enable row level security;
 
@@ -152,18 +173,13 @@ create table if not exists public.messages (
   conversation_id uuid not null references public.conversations(id) on delete cascade,
   sender_id uuid not null references auth.users(id) on delete cascade,
   content text,
-  created_at timestamptz default now(),
   read_at timestamptz,
-  automated_reply_to uuid references public.messages(id) on delete set null
+  automated_reply_to uuid references public.messages(id) on delete set null,
+  created_at timestamptz default now()
 );
-
-alter table public.messages add column if not exists read_at timestamptz;
-alter table public.messages add column if not exists automated_reply_to uuid references public.messages(id) on delete set null;
-create unique index if not exists idx_messages_automated_reply_to on public.messages(automated_reply_to);
 
 alter table public.messages enable row level security;
 
-drop policy if exists "messages_acesso_usuario" on public.messages;
 create policy "messages_acesso_usuario"
 on public.messages for all
 using (
@@ -179,108 +195,148 @@ with check (
     where c.id = messages.conversation_id
       and (c.user1_id = auth.uid() or c.user2_id = auth.uid())
   )
-  and messages.automated_reply_to is null
 );
 
 create table if not exists public.ai_reply_jobs (
   id uuid primary key default uuid_generate_v4(),
-  message_id uuid not null unique references public.messages(id) on delete cascade,
-  status text not null default 'queued'
-    check (status in ('queued', 'processing', 'completed', 'ignored', 'failed')),
-  attempts integer not null default 0,
+  message_id uuid not null references public.messages(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'queued' check (status in ('queued','processing','completed','failed','ignored')),
+  attempts int not null default 0,
   available_at timestamptz not null default now(),
   locked_at timestamptz,
-  reply_message_id uuid references public.messages(id) on delete set null,
   last_error text,
-  created_at timestamptz not null default now()
+  reply_message_id uuid references public.messages(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (message_id)
 );
 
 alter table public.ai_reply_jobs enable row level security;
 
-create or replace function public.enqueue_ai_reply_job()
+create policy "ai_reply_jobs_acesso_proprio_usuario"
+on public.ai_reply_jobs for all
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+create or replace function public.enqueue_ai_reply_job_for_message()
 returns trigger
 language plpgsql
-security definer
-set search_path = pg_catalog, public
 as $$
+declare
+  v_conversation public.conversations%rowtype;
+  v_other_user uuid;
+  v_settings public.conversation_ai_settings%rowtype;
 begin
-  if new.automated_reply_to is not null then
-    return new;
+  if NEW.automated_reply_to is not null then
+    return NEW;
   end if;
 
-  insert into public.ai_reply_jobs (message_id)
-  select new.id
-  from public.conversations c
-  join public.conversation_ai_settings s
-    on s.conversation_id = c.id
-   and s.user_id = case
-     when new.sender_id = c.user1_id then c.user2_id
-     when new.sender_id = c.user2_id then c.user1_id
-     else null
-   end
-  where c.id = new.conversation_id
-    and s.enabled
-  on conflict (message_id) do nothing;
+  select * into v_conversation
+  from public.conversations
+  where id = NEW.conversation_id;
 
-  return new;
+  if not found then
+    return NEW;
+  end if;
+
+  if v_conversation.user1_id = NEW.sender_id then
+    v_other_user := v_conversation.user2_id;
+  elsif v_conversation.user2_id = NEW.sender_id then
+    v_other_user := v_conversation.user1_id;
+  else
+    return NEW;
+  end if;
+
+  select * into v_settings
+  from public.conversation_ai_settings
+  where conversation_id = NEW.conversation_id
+    and user_id = v_other_user
+    and enabled = true
+    and automation_id is not null
+  limit 1;
+
+  if not found then
+    return NEW;
+  end if;
+
+  if not exists (
+    select 1 from public.ai_reply_jobs where message_id = NEW.id
+  ) then
+    insert into public.ai_reply_jobs (
+      message_id,
+      user_id,
+      status,
+      attempts,
+      available_at,
+      created_at,
+      updated_at
+    ) values (
+      NEW.id,
+      v_other_user,
+      'queued',
+      0,
+      now(),
+      now(),
+      now()
+    );
+  end if;
+
+  return NEW;
 end;
 $$;
 
-drop trigger if exists enqueue_ai_reply_job_after_message on public.messages;
-create trigger enqueue_ai_reply_job_after_message
+drop trigger if exists enqueue_ai_reply_job_after_message_insert on public.messages;
+create trigger enqueue_ai_reply_job_after_message_insert
 after insert on public.messages
-for each row execute function public.enqueue_ai_reply_job();
+for each row
+execute function public.enqueue_ai_reply_job_for_message();
 
-create or replace function public.claim_ai_reply_jobs(p_batch_size integer default 10)
-returns setof public.ai_reply_jobs
-language sql
-security definer
-set search_path = pg_catalog, public
+create or replace function public.claim_ai_reply_jobs(p_batch_size int default 10)
+returns table (
+  id uuid,
+  message_id uuid,
+  user_id uuid,
+  status text,
+  attempts int,
+  available_at timestamptz,
+  locked_at timestamptz,
+  last_error text,
+  reply_message_id uuid,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
 as $$
-  with expired_leases as (
-    update public.ai_reply_jobs
-    set status = 'failed',
-        locked_at = null,
-        last_error = coalesce(last_error, 'Worker lease expired after final attempt')
-    where status = 'processing'
-      and locked_at < now() - interval '5 minutes'
-      and attempts >= 5
-    returning id
-  ), candidates as (
+begin
+  return query
+  with claimed as (
     select j.id
     from public.ai_reply_jobs j
-    where (
-      (j.status = 'queued' and j.available_at <= now())
-      or (j.status = 'processing' and j.locked_at < now() - interval '5 minutes')
-    )
-      and j.attempts < 5
-    order by j.created_at
+    where j.status in ('queued', 'failed')
+      and j.available_at <= now()
+      and (j.locked_at is null or j.locked_at < now() - interval '30 minutes')
+    order by j.available_at asc, j.created_at asc
+    limit greatest(coalesce(p_batch_size, 10), 1)
     for update skip locked
-    limit least(greatest(coalesce(p_batch_size, 10), 1), 50)
   )
   update public.ai_reply_jobs j
   set status = 'processing',
       attempts = j.attempts + 1,
-      locked_at = now()
-  from candidates c
-  where j.id = c.id
-  returning j.*;
+      locked_at = now(),
+      updated_at = now()
+  from claimed
+  where j.id = claimed.id
+  returning j.id, j.message_id, j.user_id, j.status, j.attempts, j.available_at, j.locked_at, j.last_error, j.reply_message_id, j.created_at, j.updated_at;
+end;
 $$;
-
-revoke all on function public.claim_ai_reply_jobs(integer) from public, anon, authenticated;
-grant execute on function public.claim_ai_reply_jobs(integer) to service_role;
-grant select, update on public.ai_reply_jobs to service_role;
-grant select on public.conversations, public.conversation_ai_settings to service_role;
-grant select, insert on public.messages to service_role;
-
-drop trigger if exists set_updated_at_profiles on public.profiles;
-drop trigger if exists set_updated_at_tasks on public.tasks;
-drop trigger if exists set_updated_at_ai_conversations on public.ai_conversations;
 
 create index if not exists idx_profiles_email on public.profiles(email);
 create index if not exists idx_tasks_user_id on public.tasks(user_id);
 create index if not exists idx_ai_messages_conversation on public.ai_messages(conversation_id, created_at);
 create index if not exists idx_messages_conversation on public.messages(conversation_id, created_at);
+create index if not exists idx_ai_reply_jobs_status on public.ai_reply_jobs(status, available_at, locked_at);
+create index if not exists idx_conversation_automations_user on public.conversation_automations(user_id, name);
 
 -- Trigger para atualizar updated_at
 create or replace function public.set_updated_at()

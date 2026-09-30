@@ -2,20 +2,14 @@
 
 ## Atendimento automático com IA
 
-### Banco de dados
+1. Se o banco já está configurado, execute no SQL Editor o bloco `conversation_ai_settings` e sua política RLS de `supabase_schema.sql`. Para uma configuração inicial, execute o arquivo completo.
+2. Configure e salve uma API Key na Central de IA do painel.
+3. Na aba **Automações**, crie um fluxo com comando (por exemplo, `/rastreio`), assunto permitido, mensagem inicial, instruções e respostas fixas opcionais.
+4. Abra a conversa com o contato e escolha o fluxo no seletor. Enviar o comando exato, como `/rastreio`, ativa a IA nessa conversa e envia a mensagem inicial configurada; o comando em si não é enviado.
+5. Também é possível ativar **IA: On** manualmente depois de escolher o fluxo. As mensagens recebidas serão respondidas apenas dentro do assunto do fluxo, com geração limitada a 400 tokens e resposta curta.
+6. Para responder em segundo plano, rode o worker no servidor com `SUPABASE_SERVICE_ROLE_KEY` e a chave da IA no `.env`:
+   `python chat_ai_worker.py`
 
-Execute `supabase_schema.sql` no SQL Editor do Supabase. O arquivo pode ser executado novamente: recria as políticas e triggers e adiciona as colunas/tabelas da fila sem apagar as conversas existentes. A fila `ai_reply_jobs` não é acessível aos usuários autenticados; o worker a acessa com a chave `service_role`.
+Se o banco já está configurado, aplique os blocos `conversation_automations` e `automation_id` de `supabase_schema.sql` além da tabela/política `conversation_ai_settings`. Para uma configuração inicial, execute o arquivo completo.
 
-### Worker
-
-1. Copie `.env.example` para `.env` e configure `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `AI_PROVIDER`, `AI_API_KEY` e `AI_MODEL`. A chave `service_role` e a chave do provedor são segredos de servidor: nunca as coloque no HTML ou no Git.
-2. Instale as dependências com `pip install -r requirements.txt`.
-3. Inicie o processo persistente com `python chat_ai_worker.py`. Em produção, mantenha-o sob um supervisor de processos/contêiner e monitore seus logs. `AI_WORKER_POLL_SECONDS` e `AI_WORKER_BATCH_SIZE` controlam o polling.
-
-Provedores suportados: `openai`, `anthropic`, `google`, `deepseek`, `moonshot`, `openrouter` e `mistral`. Para provedores compatíveis com a API de chat da OpenAI, configure também `AI_API_BASE_URL`. Defina `AI_MODEL` com o identificador aceito pelo provedor. O worker descarta mensagens com mais de `AI_MAX_MESSAGE_AGE_MINUTES` (padrão: 60), evitando respostas atrasadas após uma parada prolongada.
-
-### Painel
-
-Abra uma conversa, configure **Regras** (`palavra-chave => resposta`) e as instruções, salve e ative **IA: On**. O trigger do banco coloca mensagens recebidas na fila; o worker responde mesmo que o atendente feche o painel. Respostas automáticas são deduplicadas por mensagem, processadas com lock concorrente e tentadas novamente em caso de falha transitória. Após cinco tentativas, o job fica com status `failed` em `ai_reply_jobs`.
-
-As chaves salvas na Central de IA do navegador continuam servindo os relatórios e a conversa direta com a IA, mas não são usadas pela automação de atendimento. Para essa automação, o provedor e a chave vêm do ambiente do worker. O histórico recente (até 12 mensagens) é enviado ao provedor de IA configurado para gerar a resposta.
+As chaves de API permanecem no `localStorage` do navegador do atendente e não são gravadas no Supabase. A automação responde enquanto o atendente estiver com a sessão aberta e a conversa selecionada. Para funcionar em segundo plano, o worker usa a fila `ai_reply_jobs` e o trigger `enqueue_ai_reply_job_after_message_insert` do schema.
