@@ -111,6 +111,8 @@ create table if not exists public.conversations (
 
 alter table public.conversations enable row level security;
 
+drop policy if exists "conversations_acesso_usuario" on public.conversations;
+
 create policy "conversations_acesso_usuario"
 on public.conversations for all
 using (auth.uid() = user1_id or auth.uid() = user2_id)
@@ -223,6 +225,8 @@ create table if not exists public.ai_reply_jobs (
 );
 
 alter table public.ai_reply_jobs enable row level security;
+
+drop policy if exists "ai_reply_jobs_acesso_proprio_usuario" on public.ai_reply_jobs;
 
 create policy "ai_reply_jobs_acesso_proprio_usuario"
 on public.ai_reply_jobs for all
